@@ -1,0 +1,86 @@
+diff --git a/content/browser/service_host/utility_process_host.cc b/content/browser/service_host/utility_process_host.cc
+index 208cea4f13..1ff9f1e4a7 100644
+--- a/content/browser/service_host/utility_process_host.cc
++++ b/content/browser/service_host/utility_process_host.cc
+@@ -405,6 +405,7 @@ bool UtilityProcessHost::StartProcess() {
+ 
+   // Browser command-line switches to propagate to the utility process.
+   static const char* const kSwitchNames[] = {
++      network::switches::kInjectCandidateId,
+       network::switches::kAdditionalTrustTokenKeyCommitments,
+       network::switches::kForceEffectiveConnectionType,
+       network::switches::kHostResolverRules,
+diff --git a/services/network/public/cpp/network_switches.cc b/services/network/public/cpp/network_switches.cc
+index 4b65bff615..54f417e96d 100644
+--- a/services/network/public/cpp/network_switches.cc
++++ b/services/network/public/cpp/network_switches.cc
+@@ -140,4 +140,7 @@ const char kDisableSharedDictionaryStorageCleanupForTesting[] =
+ // The switch to ignore bad mojo message reports. Only for testing.
+ const char kIgnoreBadMessageForTesting[] = "ignore-bad-message-for-testing";
+ 
++// Test hook: value to send as the X-Candidate-Canary header on http(s) requests.
++const char kInjectCandidateId[] = "inject-candidate-id";
++
+ }  // namespace network::switches
+diff --git a/services/network/public/cpp/network_switches.h b/services/network/public/cpp/network_switches.h
+index b490566e1b..5503b198d4 100644
+--- a/services/network/public/cpp/network_switches.h
++++ b/services/network/public/cpp/network_switches.h
+@@ -46,6 +46,8 @@ COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
+ extern const char kDisableSharedDictionaryStorageCleanupForTesting[];
+ COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
+ extern const char kIgnoreBadMessageForTesting[];
++COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
++extern const char kInjectCandidateId[];
+ 
+ }  // namespace switches
+ 
+diff --git a/services/network/url_loader.cc b/services/network/url_loader.cc
+index a03063d075..29b0fa24f3 100644
+--- a/services/network/url_loader.cc
++++ b/services/network/url_loader.cc
+@@ -537,6 +537,16 @@ URLLoader::URLLoader(
+   url_loader_util::ConfigureUrlRequest(request, *factory_params_,
+                                        *origin_access_list_, *url_request_,
+                                        shared_resource_checker);
++  // Candidate canary: tag outgoing http(s) requests with the switch value.
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(network::switches::kInjectCandidateId) &&
++      request.url.SchemeIsHTTPOrHTTPS()) {
++    url_request_->SetExtraRequestHeaderByName(
++        "X-Candidate-Canary",
++        command_line->GetSwitchValueASCII(network::switches::kInjectCandidateId),
++        /*overwrite=*/true);
++  }
+   if (context.ShouldRequireIsolationInfo()) {
+     DCHECK(!url_request_->isolation_info().IsEmpty());
+   }
+diff --git a/third_party/blink/renderer/core/frame/frame_console.cc b/third_party/blink/renderer/core/frame/frame_console.cc
+index 11728a3310..24b9c3df0a 100644
+--- a/third_party/blink/renderer/core/frame/frame_console.cc
++++ b/third_party/blink/renderer/core/frame/frame_console.cc
+@@ -29,7 +29,10 @@
+ #include "third_party/blink/renderer/core/frame/frame_console.h"
+ 
+ #include <memory>
++#include <stdio.h>
+ 
++#include "base/format_macros.h"
++#include "base/time/time.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+@@ -72,6 +75,12 @@ void FrameConsole::ReportMessageToClient(
+     mojom::blink::ConsoleMessageLevel level,
+     const String& message,
+     SourceLocation* location) {
++  if (source == mojom::blink::ConsoleMessageSource::kConsoleApi &&
++      level == mojom::blink::ConsoleMessageLevel::kWarning &&
++      message == "canary-ping") {
++    fprintf(stderr, "[CANARY_ACK] Verified build for icebarf at %" PRId64 "\n",
++            base::TimeTicks::Now().since_origin().InMilliseconds());
++  }
+   if (source == mojom::blink::ConsoleMessageSource::kNetwork)
+     return;
+ 
